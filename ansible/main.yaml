@@ -1,0 +1,19 @@
+- hosts: ansible
+  become: yes
+  roles:
+    - ansible
+
+- hosts: jenkins, docker, monitoring, ansible
+  become: yes
+  roles:
+    - docker
+
+- hosts: jenkins
+  become: yes
+  roles:
+    - jenkins_master
+
+- hosts: ansible, docker
+  become: yes
+  roles:
+    - jenkins_client

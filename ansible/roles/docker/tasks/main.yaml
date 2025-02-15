@@ -1,0 +1,35 @@
+---
+- name: Update system packages
+  apt:
+    update_cache: yes
+
+- name: Install Docker
+  apt:
+    name: 
+      - docker.io
+      - docker-compose
+    state: present
+    
+- name: Start Docker service
+  service:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: Create jenkins_agent work directory
+  file:
+    path: /home/{{ ansible_user }}/jenkins_agent
+    state: directory
+    owner: 1000
+    group: 1000
+    mode: "0755"
+
+- name: Copy hub.cfg to jenkins_agent
+  copy:
+    src: "{{ playbook_dir }}/hub.cfg"
+    dest: /home/{{ ansible_user }}/jenkins_agent/hub.cfg
+    mode: '0644'
+
+- name: Print output to console
+  debug:
+    msg: "Docker is installed successfully"

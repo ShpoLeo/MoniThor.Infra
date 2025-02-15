@@ -1,0 +1,152 @@
+---
+- name: Read terraform variables
+  slurp:
+    src: "{{ playbook_dir }}/../tf/terraform.tfvars"
+  register: terraform_vars_content
+  delegate_to: localhost
+  become: false
+
+- name: Parse terraform variables
+  set_fact:
+    tf_vars: "{{ terraform_vars_content['content'] | b64decode | regex_replace('\\s*=\\s*', ': ') | regex_replace('\"', '') | from_yaml }}"
+  become: false
+
+- name: Install Java (required for Jenkins agent)
+  apt:
+    name: openjdk-17-jre-headless
+    state: present
+
+- name: Print Java installation status
+  debug:
+    msg: "Java installation completed"
+
+- name: Create Key destination directory
+  file:
+    path: "{{ tf_vars.key_path }}"
+    state: directory
+    mode: '0755'
+    owner: 1000
+    group: 1000
+
+- name: Copy SSH private key
+  copy:
+    src: "{{ tf_vars.key_path }}/{{ tf_vars.key_name }}.pem"
+    dest: "{{ tf_vars.key_path }}/{{ tf_vars.key_name }}.pem"
+    mode: '0600'
+    owner: 1000
+    group: 1000
+
+- name: Copy .env to jenkins_home
+  copy:
+    src: "{{ playbook_dir }}/.env"
+    dest: /root/.env
+    mode: '0777'
+
+- name: Print directory creation status
+  debug:
+    msg: "Jenkins agent work directory created at /home/{{ ansible_user }}/jenkins_agent"
+
+- name: Download Jenkins agent JAR file
+  get_url:
+    url: "http://{{ jenkins_master_ip }}:8080/jnlpJars/agent.jar"
+    dest: /home/{{ ansible_user }}/jenkins_agent/agent.jar
+    owner: 1000
+    group: 1000
+    mode: "0644"
+
+- name: Print JAR download status
+  debug:
+    msg: "Jenkins agent JAR file downloaded successfully"
+
+- name: Set agent name based on inventory group
+  set_fact:
+    agent_name: >-
+      {%- if inventory_hostname in groups['docker'] -%}
+      docker-agent
+      {%- elif inventory_hostname in groups['ansible'] -%}
+      ansible-agent
+      {%- endif -%}
+
+- name: Get agent secret from Jenkins master
+  uri:
+    url: "http://{{ jenkins_master_ip }}:8080/computer/{{ agent_name }}/jenkins-agent.jnlp"
+    method: GET
+    user: "admin"
+    password: "admin"
+    force_basic_auth: yes
+    validate_certs: no
+    status_code: 200
+    return_content: yes
+  register: jnlp_file
+
+- name: Extract agent secret from response
+  set_fact:
+    jenkins_agent_secret: "{{ jnlp_file.content | regex_search('<application-desc><argument>([a-z0-9]{64})</argument>', '\\1') | first | replace('[', '') | replace(']', '') }}"
+
+- name: Print agent secret
+  debug:
+    msg: "Jenkins agent secret: {{ jenkins_agent_secret }}"
+
+- name: Create systemd service file for Jenkins agent
+  copy:
+    dest: /etc/systemd/system/jenkins-agent.service
+    content: |
+      [Unit]
+      Description=Jenkins Agent Service
+      After=network.target
+
+      [Service]
+      User=root
+      WorkingDirectory=/home/{{ ansible_user }}/jenkins_agent
+      ExecStart=/usr/bin/java -jar /home/{{ ansible_user }}/jenkins_agent/agent.jar \
+          -url http://{{ jenkins_master_ip }}:8080/ \
+          -secret {{ jenkins_agent_secret }} \
+          -name {{ agent_name }} \
+          -webSocket \
+          -workDir /home/{{ ansible_user }}/jenkins_agent
+      Restart=always
+      RestartSec=10
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Print service file creation status
+  debug:
+    msg: "Jenkins agent systemd service file created"
+
+- name: Reload systemd to apply the new service
+  command: systemctl daemon-reload
+
+- name: Print systemd reload status
+  debug:
+    msg: "Systemd daemon reloaded successfully"
+
+- name: Enable Jenkins agent service
+  systemd:
+    name: jenkins-agent
+    enabled: yes
+
+- name: Print service enable status
+  debug:
+    msg: "Jenkins agent service enabled successfully"
+
+- name: Start Jenkins agent service
+  systemd:
+    name: jenkins-agent
+    state: started
+
+- name: Print service start status
+  debug:
+    msg: "Jenkins agent service started successfully"
+
+- name: Print final completion message
+  debug:
+    msg: "Jenkins agent installation and configuration completed successfully"
+
+- name: Print output to console
+  debug:
+    msg: "Everything is ready, go to http://{{ jenkins_master_ip }}:8080"
+
+- name: Print output to console
+  debug:
+    msg: "After successeful job build, go to http://{{ load_balancer_dns }}"

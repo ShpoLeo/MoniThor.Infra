@@ -1,0 +1,260 @@
+---
+- name: Create Docker build directory
+  file:
+    path: /tmp/jenkins-docker
+    state: directory
+    mode: "0755"
+
+- name: Create plugins.txt file
+  copy:
+    dest: /tmp/jenkins-docker/plugins.txt
+    content: |
+      pipeline-stage-view:latest
+      git:latest
+      workflow-aggregator:latest
+      blueocean:latest
+      ansible:latest
+      antisamy-markup-formatter:latest
+      authorize-project:latest
+      build-timeout:latest
+      cloudbees-folder:latest
+      configuration-as-code:latest
+      credentials-binding:latest
+      email-ext:latest
+      git:latest
+      github-branch-source:latest
+      gradle:latest
+      ldap:latest
+      mailer:latest
+      matrix-auth:latest
+      pam-auth:latest
+      pipeline-github-lib:latest
+      ssh-slaves:latest
+      timestamper:latest
+      workflow-aggregator:latest
+      ws-cleanup:latest
+      pipeline-stage-view:2.34
+      job-dsl:latest
+      workflow-job:latest
+      workflow-cps:latest
+
+- name: Create nodes.groovy file
+  copy:
+    dest: /tmp/jenkins-docker/nodes.groovy
+    mode: "0644"
+    content: |
+      import jenkins.model.*
+      import hudson.model.*
+      import hudson.slaves.*
+      import hudson.plugins.sshslaves.*
+
+      def jenkins = Jenkins.getInstance()
+
+      // Docker Agent Node
+      def dockerAgentName = 'docker-agent'
+      def dockerAgentDesc = 'Docker Build Agent'
+      def dockerAgentHome = '/home/ubuntu/jenkins_agent'
+      def dockerAgentExecutors = 2
+
+      // Ansible Agent Node
+      def ansibleAgentName = 'ansible-agent'
+      def ansibleAgentDesc = 'Ansible Deployment Agent'
+      def ansibleAgentHome = '/home/ubuntu/jenkins_agent'
+      def ansibleAgentExecutors = 2
+
+      // Create Docker Agent
+      def dockerAgent = new DumbSlave(
+          dockerAgentName,
+          dockerAgentDesc,
+          dockerAgentHome,
+          dockerAgentExecutors.toString(),
+          Node.Mode.NORMAL,
+          "docker-agent",
+          new JNLPLauncher(true),
+          RetentionStrategy.INSTANCE
+      )
+
+      // Create Ansible Agent
+      def ansibleAgent = new DumbSlave(
+          ansibleAgentName,
+          ansibleAgentDesc,
+          ansibleAgentHome,
+          ansibleAgentExecutors.toString(),
+          Node.Mode.NORMAL,
+          "ansible-agent",
+          new JNLPLauncher(true),
+          RetentionStrategy.INSTANCE
+      )
+
+      // Add both agents to Jenkins
+      jenkins.addNode(dockerAgent)
+      jenkins.addNode(ansibleAgent)
+    
+- name: Create JCasC configuration file
+  copy:
+    dest: /tmp/jenkins-docker/casc.yaml
+    content: |
+      jenkins:
+        securityRealm:
+          local:
+            allowsSignup: false
+            users:
+              - id: "admin"
+                password: "admin"
+        authorizationStrategy:
+          loggedInUsersCanDoAnything:
+            allowAnonymousRead: false
+        systemMessage: "Jenkins configured as code with Docker"
+        nodes:
+          - permanent:
+              name: "docker-agent"
+              remoteFS: "/home/ubuntu/jenkins_agent"
+              numExecutors: 2
+              labelString: "docker-agent"
+              mode: NORMAL
+              launcher:
+                jnlp:
+                  workDirSettings:
+                    disabled: false
+                    failIfWorkDirIsMissing: false
+                    internalDir: "remoting"
+          - permanent:
+              name: "ansible-agent"
+              remoteFS: "/home/ubuntu/jenkins_agent"
+              numExecutors: 2
+              labelString: "ansible-agent"
+              mode: NORMAL
+              launcher:
+                jnlp:
+                  workDirSettings:
+                    disabled: false
+                    failIfWorkDirIsMissing: false
+                    internalDir: "remoting"
+
+- name: Create job configuration file
+  copy:
+    dest: /tmp/jenkins-docker/job-config.xml
+    content: |
+      <flow-definition plugin="workflow-job@2.42">
+        <description>Job created via Ansible</description>
+        <keepDependencies>false</keepDependencies>
+        <properties/>
+        <definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition" plugin="workflow-cps@2.94">
+          <scm class="hudson.plugins.git.GitSCM" plugin="git@4.13.0">
+            <configVersion>2</configVersion>
+            <userRemoteConfigs>
+              <hudson.plugins.git.UserRemoteConfig>
+                <url>https://github.com/MayElbaz18/Monithor-Work.git</url>
+              </hudson.plugins.git.UserRemoteConfig>
+            </userRemoteConfigs>
+            <branches>
+              <hudson.plugins.git.BranchSpec>
+                <name>*/main</name>
+              </hudson.plugins.git.BranchSpec>
+            </branches>
+            <doGenerateSubmoduleConfigurations>false</doGenerateSubmoduleConfigurations>
+            <submoduleCfg class="list"/>
+            <extensions/>
+          </scm>
+          <scriptPath>Jenkinsfile</scriptPath>
+          <lightweight>true</lightweight>
+        </definition>
+        <triggers/>
+        <disabled>false</disabled>
+      </flow-definition>
+
+- name: Create docker-compose.yml file
+  copy:
+    dest: /tmp/jenkins-docker/docker-compose.yml
+    content: |
+      version: "3.8"
+      services:
+        jenkins:
+          build:
+            context: .
+          ports:
+            - 8080:8080
+            - 50000:50000
+          volumes:
+            - jenkins_data:/var/jenkins_home
+      volumes:
+        jenkins_data:
+
+- name: Create Dockerfile for Jenkins
+  copy:
+    dest: "/tmp/jenkins-docker/Dockerfile"
+    content: |
+      FROM jenkins/jenkins:lts
+      ENV JAVA_OPTS="-Djenkins.install.runSetupWizard=false"
+      ENV JENKINS_USER="admin"
+      ENV JENKINS_PASS="admin"
+
+      USER root
+      RUN apt-get update && apt-get install -y curl git jq && apt-get clean
+
+      USER jenkins
+
+      COPY plugins.txt /usr/share/jenkins/ref/plugins.txt
+      RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt
+      
+      COPY nodes.groovy /var/jenkins_home/init.groovy.d/nodes.groovy
+      COPY casc.yaml /var/jenkins_home/casc.yaml
+      ENV CASC_JENKINS_CONFIG=/var/jenkins_home/casc.yaml
+
+      COPY job-config.xml /usr/share/jenkins/ref/jobs/MoniThorDeployment/config.xml
+
+- name: Build Jenkins Docker image
+  command: docker-compose build
+  args:
+    chdir: /tmp/jenkins-docker
+  register: build_result
+  ignore_errors: true
+
+- name: Debug Docker build output
+  debug:
+    var: build_result
+  when: build_result.failed
+
+- name: Check Docker build status
+  fail:
+    msg: "Docker build failed. Please check the debug output above."
+  when: build_result.failed
+
+- name: Start Jenkins container
+  command: docker-compose up -d
+  args:
+    chdir: /tmp/jenkins-docker
+  register: startup_result
+  ignore_errors: true
+
+- name: Debug Docker startup output
+  debug:
+    var: startup_result
+  when: startup_result.failed
+
+- name: Check Docker startup status
+  fail:
+    msg: "Docker startup failed. Please check the debug output above."
+  when: startup_result.failed
+
+- name: Wait for Jenkins to be ready
+  uri:
+    url: "http://{{ ansible_host }}:8080/login?from=%2F"
+    user: "admin"
+    password: "admin"
+    method: GET
+    status_code: 200
+  retries: 10
+  delay: 15
+
+- name: Verify Jenkins job creation
+  uri:
+    url: "http://{{ ansible_host }}:8080/login?from=%2Fjob%2FMoniThorDeployment%2Fapi%2Fjson"
+    user: "admin"
+    password: "admin"
+    method: GET
+    status_code: 200
+
+- name: Print output to console
+  debug:
+    msg: "Jenkins job created successfully http://{{ ansible_host }}:8080"

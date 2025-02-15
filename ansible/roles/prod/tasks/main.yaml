@@ -1,0 +1,41 @@
+- hosts: monitoring
+  become: yes
+  tasks:
+    - name: Create monitor-data directory and set ownership 
+      ansible.builtin.file: 
+        path: /monithor-data
+        state: directory 
+        owner: 1000 
+        group: 1000 
+        mode: '0755'
+
+    - name: Copy .env file
+      copy:
+        src: "{{ playbook_dir }}/.env"
+        dest: /monithor-data/.env
+        mode: '0777'
+        owner: 1000
+        group: 1000
+
+    - name: Log into Docker Hub
+      community.docker.docker_login:
+        username: "{{ docker_hub_username }}"
+        password: "{{ docker_hub_password }}"
+        
+    - name: Pull Docker image
+      community.docker.docker_image:
+        name: "maye18/monithor"
+        tag: "{{ docker_tag }}"
+        source: pull
+
+    - name: Run Docker container
+      community.docker.docker_container:
+        name: "monithor_container"
+        image: "maye18/monithor:{{ docker_tag }}"
+        env_file: /monithor-data/.env
+        state: started
+        volumes: 
+          - /monithor-data:/MoniTHOR--Project/userdata
+        published_ports:
+          - "8080:8080"
+        restart_policy: always

@@ -1,0 +1,71 @@
+---
+- name: Update apt cache
+  apt:
+    update_cache: yes
+
+- name: Install software-properties-common (for managing PPAs)
+  apt:
+    name: software-properties-common
+    state: present
+
+- name: Add the Ansible PPA
+  apt_repository:
+    repo: ppa:ansible/ansible
+    state: present
+
+- name: Install Ansible
+  apt:
+    name: ansible
+    state: present
+
+- name: Print output to console
+  debug:
+    msg: "Ansible is installed successfully"
+
+- name: Create infra/ansible directory structure
+  file:
+    path: "/home/{{ ansible_user }}/infra/ansible"
+    state: directory
+    mode: '0755'
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
+- name: Print output to console
+  debug:
+    msg: "Ansible directory structure created successfully"
+
+- name: Copy .env file
+  copy:
+    src: "{{ playbook_dir }}/.env"
+    dest: "/home/{{ ansible_user }}/infra/ansible/.env"
+    mode: '0777'
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
+- name: Print .env file copy status
+  debug:
+    msg: ".env file copied successfully to ansible agent"
+
+- name: Copy ansible.cfg
+  copy:
+    src: "{{ playbook_dir }}/ansible.cfg"
+    dest: "/home/{{ ansible_user }}/infra/ansible/ansible.cfg"
+    mode: '0644'
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
+- name: Copy inventory.yaml
+  copy:
+    src: "{{ playbook_dir }}/inventory.yaml"
+    dest: "/home/{{ ansible_user }}/infra/ansible/inventory.yaml"
+    mode: '0644'
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
+- name: Copy prod role tasks
+  copy:
+    src: "{{ playbook_dir }}/roles/prod/tasks/main.yaml"
+    dest: "/home/{{ ansible_user }}/infra/ansible/main.yaml"
+    mode: '0644'
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
